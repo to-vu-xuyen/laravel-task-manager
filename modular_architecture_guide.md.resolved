@@ -1,0 +1,257 @@
+# Modular Architecture — Task & ActivityLog Modules
+
+Hướng dẫn tổ chức module riêng biệt cho Task và ActivityLog trong Laravel, tuân thủ SOLID & DDD.
+
+## 🔧 Community Skills Áp Dụng
+
+`architecture`, `clean-code`, `software-architecture`, `database-design`
+
+---
+
+## 3 Approaches So Sánh
+
+| Tiêu chí | A. DDD Domain Layer (không package) | B. `nwidart/laravel-modules` | C. Hybrid (nwidart + DDD) |
+|----------|--------------------------------------|-------------------------------|---------------------------|
+| **Complexity** | ⭐⭐ Trung bình | ⭐⭐ Trung bình | ⭐⭐⭐⭐ Cao |
+| **Package dependency** | Không cần | `nwidart/laravel-modules` | `nwidart/laravel-modules` |
+| **Learning curve** | Thấp (chỉ cần hiểu PSR-4) | Trung bình (CLI commands mới) | Cao (DDD concepts + package) |
+| **Flexibility** | Cao — tùy chỉnh hoàn toàn | Trung bình — theo convention | Rất cao |
+| **Phù hợp project size** | Nhỏ → Trung bình | Trung bình → Lớn | Lớn → Enterprise |
+| **Laravel ecosystem** | ✅ Native, không conflict | ⚠️ Override một số conventions | ⚠️ Override nhiều conventions |
+| **Artisan make:xxx** | ✅ Hoạt động bình thường | ⚠️ Cần dùng `module:make-xxx` | ⚠️ Cần custom |
+
+---
+
+## ✅ Khuyến Nghị: Approach A — DDD Domain Layer
+
+> [!IMPORTANT]  
+> Với quy mô Task Manager hiện tại (4 entities, 1 developer), **Approach A là best practice** — đủ modular, không over-engineer, không dependency ngoài. Khi project grow lên, có thể migrate sang Approach B dễ dàng.
+
+Nguyên lý theo `software-architecture` skill:
+- *"Start simple, add complexity ONLY when proven necessary"*
+- *"Separate domain entities from infrastructure concerns"*
+- *"Keep business logic independent of frameworks"*
+
+---
+
+## 📁 Cấu Trúc Thư Mục — Approach A
+
+```
+app/
+├── Domain/                          ← 🔵 Core Business Logic (framework-agnostic)
+│   ├── Task/                        ← Module Task
+│   │   ├── Models/
+│   │   │   ├── Task.php
+│   │   │   └── TaskAttachment.php
+│   │   ├── Enums/
+│   │   │   └── TaskStatus.php
+│   │   ├── Services/
+│   │   │   ├── TaskService.php
+│   │   │   └── TaskAttachmentService.php
+│   │   ├── Repositories/
+│   │   │   └── TaskRepository.php
+│   │   ├── Contracts/               ← Interfaces
+│   │   │   ├── TaskServiceInterface.php
+│   │   │   └── TaskRepositoryInterface.php
+│   │   ├── Events/
+│   │   │   ├── TaskCreated.php
+│   │   │   └── TaskStatusChanged.php
+│   │   └── Observers/
+│   │       └── TaskObserver.php
+│   │
+│   └── ActivityLog/                 ← Module ActivityLog
+│       ├── Models/
+│       │   └── ActivityLog.php
+│       ├── Services/
+│       │   └── ActivityLogService.php
+│       ├── Contracts/
+│       │   └── ActivityLogServiceInterface.php
+│       └── Listeners/
+│           └── LogTaskActivity.php
+│
+├── Http/                            ← 🟢 Presentation Layer (Laravel-specific)
+│   ├── Controllers/
+│   │   ├── Web/
+│   │   │   └── TaskController.php
+│   │   └── Api/
+│   │       └── V1/
+│   │           └── TaskController.php
+│   ├── Requests/
+│   │   ├── StoreTaskRequest.php
+│   │   └── UpdateTaskRequest.php
+│   └── Resources/
+│       ├── TaskResource.php
+│       └── TaskCollection.php
+│
+├── Models/
+│   └── User.php                     ← User vẫn ở đây (cross-domain)
+│
+└── Providers/
+    ├── AppServiceProvider.php
+    ├── TaskServiceProvider.php       ← DI binding cho Task module
+    └── ActivityLogServiceProvider.php ← DI binding cho ActivityLog module
+```
+
+### Tại sao cấu trúc này?
+
+| Quyết định | Lý do |
+|------------|-------|
+| `Domain/Task/` vs `Modules/Task/` | Domain layer = business logic thuần, không phụ thuộc Laravel framework |
+| Models nằm trong `Domain/` | Model là core entity, liên kết chặt với business rules |
+| Controllers nằm trong `Http/` | Controllers là presentation layer, KHÔNG phải business logic |
+| Requests nằm trong `Http/` | Form validation = HTTP concern, không phải domain |
+| User.php nằm ở `Models/` gốc | User là cross-cutting concern, dùng bởi nhiều domains |
+| Mỗi module có riêng ServiceProvider | Đăng ký DI binding, observers, events riêng biệt → SRP |
+
+---
+
+## ⚙️ Thiết Lập PSR-4 Autoload
+
+Không cần thay đổi gì! Laravel autoload `app/` → `App\` mặc định. Các class mới sẽ tự động được load:
+
+```
+App\Domain\Task\Models\Task
+App\Domain\Task\Services\TaskService
+App\Domain\ActivityLog\Models\ActivityLog
+```
+
+> [!TIP]
+> Đây là ưu điểm lớn của Approach A — **zero config**, chỉ cần tạo folders và classes đúng namespace.
+
+---
+
+## 🔌 Service Providers — Module Registration
+
+### TaskServiceProvider
+
+```php
+// app/Providers/TaskServiceProvider.php
+namespace App\Providers;
+
+use Illuminate\Support\ServiceProvider;
+use App\Domain\Task\Contracts\TaskServiceInterface;
+use App\Domain\Task\Contracts\TaskRepositoryInterface;
+use App\Domain\Task\Services\TaskService;
+use App\Domain\Task\Repositories\TaskRepository;
+use App\Domain\Task\Models\Task;
+use App\Domain\Task\Observers\TaskObserver;
+
+class TaskServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        // Bind interfaces → implementations (DIP — SOLID)
+        $this->app->bind(TaskRepositoryInterface::class, TaskRepository::class);
+        $this->app->bind(TaskServiceInterface::class, TaskService::class);
+    }
+
+    public function boot(): void
+    {
+        // Register model observer
+        Task::observe(TaskObserver::class);
+    }
+}
+```
+
+### ActivityLogServiceProvider
+
+```php
+// app/Providers/ActivityLogServiceProvider.php
+namespace App\Providers;
+
+use Illuminate\Support\ServiceProvider;
+use App\Domain\ActivityLog\Contracts\ActivityLogServiceInterface;
+use App\Domain\ActivityLog\Services\ActivityLogService;
+use App\Domain\Task\Events\TaskCreated;
+use App\Domain\Task\Events\TaskStatusChanged;
+use App\Domain\ActivityLog\Listeners\LogTaskActivity;
+use Illuminate\Support\Facades\Event;
+
+class ActivityLogServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->app->bind(ActivityLogServiceInterface::class, ActivityLogService::class);
+    }
+
+    public function boot(): void
+    {
+        // ActivityLog lắng nghe events từ Task module
+        // → Loose coupling: Task KHÔNG biết ActivityLog tồn tại
+        Event::listen(TaskCreated::class, LogTaskActivity::class);
+        Event::listen(TaskStatusChanged::class, LogTaskActivity::class);
+    }
+}
+```
+
+### Đăng ký trong [bootstrap/providers.php](file:///c:/wamp64/www/l-task-manager/bootstrap/providers.php)
+
+```php
+// bootstrap/providers.php (Laravel 12)
+return [
+    App\Providers\AppServiceProvider::class,
+    App\Providers\TaskServiceProvider::class,
+    App\Providers\ActivityLogServiceProvider::class,
+];
+```
+
+---
+
+## 🔀 Module Communication — Event-Driven
+
+```mermaid
+graph LR
+    A[Task Module] -->|dispatch TaskCreated event| B[Laravel Event Bus]
+    B -->|listen| C[ActivityLog Module]
+    A -->|dispatch TaskStatusChanged event| B
+
+    style A fill:#4CAF50,color:white
+    style C fill:#2196F3,color:white
+    style B fill:#FF9800,color:white
+```
+
+> [!IMPORTANT]
+> Modules giao tiếp qua **Events**, KHÔNG import trực tiếp lẫn nhau. Task module dispatch events, ActivityLog module lắng nghe. Đây là best practice cho **loose coupling**.
+
+---
+
+## 📋 Migration Strategy
+
+Migrations vẫn nằm ở `database/migrations/` (default Laravel). **Không cần di chuyển**:
+
+```
+database/migrations/
+├── 2026_03_07_041347_create_tasks_table.php          ← ✅ Đã tạo
+├── 2026_03_07_082137_create_task_attachments_table.php ← ✅ Đã tạo  
+└── 2026_03_07_091726_create_activity_logs_table.php   ← ✅ Đã tạo
+```
+
+> [!NOTE]
+> Chỉ khi dùng `nwidart/laravel-modules` (Approach B) thì mỗi module mới có riêng `Database/Migrations/`. Với Approach A, giữ migrations ở vị trí default là đúng convention.
+
+---
+
+## 📊 So Sánh với Yii2 Source
+
+| Aspect | Yii2 (`task-manager`) | Laravel (`l-task-manager`) |
+|--------|----------------------|---------------------------|
+| Module structure | `common/models/task/`, `common/services/task/` | `app/Domain/Task/` (gom tất cả trong 1 domain) |
+| Interface location | `common/repositories/task/interfaces/` | `app/Domain/Task/Contracts/` |
+| Cross-module comm. | Service calls trực tiếp | Events + Listeners (loose coupling) |
+| DI registration | `Yii::$container->set()` | `ServiceProvider::register()` |
+| Module activation | `config/modules` | `bootstrap/providers.php` |
+
+---
+
+## Checklist Triển Khai
+
+- [ ] Tạo folder `app/Domain/Task/` structure
+- [ ] Tạo folder `app/Domain/ActivityLog/` structure
+- [ ] Di chuyển/tạo Models vào Domain folders
+- [ ] Tạo `TaskServiceProvider.php`
+- [ ] Tạo `ActivityLogServiceProvider.php`
+- [ ] Đăng ký providers trong `bootstrap/providers.php`
+- [ ] Tạo Contracts (interfaces) cho mỗi module
+- [ ] Tạo Events cho Task module
+- [ ] Tạo Listeners trong ActivityLog module
+- [ ] Verify: `php artisan about` — check providers loaded

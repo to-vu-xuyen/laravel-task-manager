@@ -1,0 +1,151 @@
+# Best Practice: Xử Lý "Admin" và "User" Trong Kiến Trúc Module
+
+Để tổ chức **Task Module** và **ActivityLog Module** riêng biệt sao cho vừa phục vụ trang Admin (Quản trị viên) và trang User (Người dùng thường đăng nhập), best practice khuyên dùng là tách bạch **Domain Layer (Core logic)** và **Presentation Layer (Giao diện/HTTP)** theo tư tưởng Clean Architecture / DDD.
+
+---
+
+## ⛔ Sai lầm phổ biến (Anti-Pattern)
+
+Nhiều lập trình viên thường viết chung 1 `TaskController`, dùng vòng lặp `if ($user->isAdmin())` khắp nơi trong Controller và Service:
+
+```php
+// ❌ BAD PRACTICE
+public function index() {
+    if (auth()->user()->role === 'admin') {
+        return view('admin.tasks.index');
+    }
+    return view('user.tasks.index');
+}
+```
+*Hệ quả:* Code Controller và Service phình to (Fat Controller), khó maintain, phá vỡ nguyên tắc Mở/Đóng (Open/Closed Principle).
+
+---
+
+## ✅ Best Practice: Chia Tách Ở Tầng HTTP (Presentation Layer)
+
+Nguyên tắc cốt lõi: **"Domain Layer (Service/Model/Repo) là trái tim dùng chung. Http Layer (Controller/Request/Route) phân chia theo người gọi."**
+
+Module [Task](file:///C:/wamp64/www/task-manager/common/models/task/Task.php#26-139) và [ActivityLog](file:///C:/wamp64/www/task-manager/common/models/activitylog/ActivityLog.php#21-88) hoàn toàn không quan tâm ai đang gọi nó (người dùng hay hệ thống hay admin). Việc phân biệt Admin/User chỉ xảy ra ở ngoài cùng (Routers / Controllers).
+
+### 📁 Cấu Trúc Thư Mục Chuẩn
+
+```
+app/
+├── Domain/                                ← 🟡 CORE LOGIC (DÙNG CHUNG)
+│   ├── Task/
+│   │   ├── Models/Task.php
+│   │   ├── Services/TaskService.php       ← Chứa business logic thuần
+│   │   └── Repositories/TaskRepository.php
+│   │
+│   └── ActivityLog/
+│       ├── Models/ActivityLog.php
+│       └── Services/ActivityLogService.php
+│
+├── Http/                                  ← 🟢 PRESENTATION LAYER (TÁCH RIÊNG ĐỂ GỌI SERVICE)
+│   ├── Controllers/
+│   │   ├── Admin/                         ← Dành riêng cho giao diện Admin
+│   │   │   ├── TaskController.php         (View toàn bộ task hệ thống)
+│   │   │   └── ActivityLogController.php  (Xem log của tất cả User)
+│   │   │
+│   │   └── Web/                           ← Dành riêng cho User đăng nhập
+│   │       ├── TaskController.php         (Chỉ xem/quản lý task của chính user đó)
+│   │       └── ActivityLogController.php  (Chỉ xem log của cá nhân mình - nếu bạn muốn)
+│   │
+│   └── Middleware/
+│       └── IsAdmin.php                    ← Middleware phân quyền
+```
+
+---
+
+## 🛠 Cách Giao Tiếp Giữa Controller và Service
+
+Cả `Admin/TaskController.php` và `Web/TaskController.php` đều gọi chung [TaskService](file:///C:/wamp64/www/task-manager/common/services/task/TaskService.php#19-175). Service sẽ nhận các đối số để biết cần làm gì, chứ không tự check `auth()->user()`.
+
+### 1. Ở Tầng Domain (Dùng Chung Dễ Dàng Test)
+
+```php
+// app/Domain/Task/Services/TaskService.php
+namespace App\Domain\Task\Services;
+
+class TaskService implements TaskServiceInterface 
+{
+    // Cung cấp logic chung
+    public function getTasksForUser(int $userId) 
+    {
+        return $this->repository->findByUserId($userId);
+    }
+
+    public function getAllTasksForAdmin() 
+    {
+        return $this->repository->findAllWithPagination(); // Lấy tất cả
+    }
+}
+```
+
+### 2. Ở Tầng Controller (Tách Rời Hoàn Toàn)
+
+**Controller Cho User:**
+```php
+// app/Http/Controllers/Web/TaskController.php
+namespace App\Http\Controllers\Web;
+
+class TaskController extends Controller 
+{
+    public function index(TaskServiceInterface $taskService) 
+    {
+        // User bình thường: Truyền ID của chính user đăng nhập vào service
+        $tasks = $taskService->getTasksForUser(auth()->id());
+        
+        return view('web.tasks.index', compact('tasks'));
+    }
+}
+```
+
+**Controller Cho Admin:**
+```php
+// app/Http/Controllers/Admin/TaskController.php
+namespace App\Http\Controllers\Admin;
+
+class TaskController extends Controller 
+{
+    public function index(TaskServiceInterface $taskService) 
+    {
+        // Quản trị viên: Lấy toàn bộ danh sách
+        $tasks = $taskService->getAllTasksForAdmin();
+        
+        return view('admin.tasks.index', compact('tasks'));
+    }
+}
+```
+
+---
+
+## 🌐 Cấu Trúc File Định Tuyến (Routing)
+
+Thay vì ghi đè tất cả vào chung [routes/web.php](file:///C:/wamp64/www/l-task-manager/routes/web.php), hãy tách file định tuyến để rõ ràng và dễ áp dụng Middleware:
+
+```php
+// routes/web.php (Hoặc routes/user.php)
+Route::middleware(['auth'])->group(function () {
+    Route::resource('tasks', \App\Http\Controllers\Web\TaskController::class);
+});
+```
+
+```php
+// routes/admin.php
+Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
+    Route::resource('tasks', \App\Http\Controllers\Admin\TaskController::class);
+    Route::resource('activity-logs', \App\Http\Controllers\Admin\ActivityLogController::class);
+});
+```
+*Lưu ý: Bạn có thể đăng ký file `routes/admin.php` trong [bootstrap/app.php](file:///c:/wamp64/www/l-task-manager/bootstrap/app.php) (Laravel 12).*
+
+---
+
+## 📌 Tóm Lược Tư Duy Cho Module "Task" và "ActivityLog"
+
+1. **Model, Repository, Service (Domain)**: Xây dựng nó để chạy cho mọi bài toán, như một thư viện độc lập. Không nhúng các câu lệnh liên quan trực tiếp Auth Session, hay View vào trong.
+2. **Controller (Http)**: Tạo 2 Controller riêng (`Admin/TaskController`, `Web/TaskController`). Middleware sẽ bảo vệ Controller nào ai được vào. Các Controller này sẽ gọi hàm tương ứng trong Service.
+3. **Form Request**: Cũng tách ra. Admin tạo Task có thể cần request khác (ví dụ admin có quyền thay đổi Assignee tuỳ ý cho người khác, còn User tạo Task thì tự gán cho User đó). Nên ta sẽ có `Admin/StoreTaskRequest` và `Web/StoreTaskRequest`.
+
+**=> Đây là "chuẩn" Clean Architecture / DDD giúp dự án có khả năng scale không giới hạn, không bao giờ bị conflict code hay rò rỉ quyền quản trị.**
