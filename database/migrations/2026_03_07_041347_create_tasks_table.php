@@ -4,8 +4,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
-{
+return new class extends Migration {
     /**
      * Run the migrations.
      */
@@ -19,7 +18,7 @@ return new class extends Migration
             $table->text('description', 255)->nullable();
             $table->text('content')->nullable();
             $table->string('status')->default('pending')->index();
-            $table->dateTime('due_date')->nullable();
+            $table->dateTime('due_at')->nullable();
             // $table->dateTime('created_at')->nullable();
             // $table->dateTime('updated_at')->nullable();
             // $table->dateTime('deleted_at')->nullable();
