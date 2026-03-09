@@ -6,9 +6,11 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 use App\Domain\Task\Models\Task;
 
-class TaskCreate
+class TaskCreated
 {
     use Dispatchable, SerializesModels;
 
-    public function __construct(public readonly Task $task) {}
+    public function __construct(public readonly Task $task)
+    {
+    }
 }
