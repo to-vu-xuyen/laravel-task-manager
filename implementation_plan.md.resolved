@@ -1,650 +1,395 @@
-# Laravel Task Manager — Hướng Dẫn Từ Dễ Đến Khó
+# Task Cache Implementation — Decorator Pattern + Cache Tags
 
-Xây dựng lại toàn bộ nghiệp vụ của Yii2 Task Manager (`C:\wamp64\www\task-manager`) trên Laravel 12 (`C:\wamp64\www\l-task-manager`), tuân thủ SOLID principles và Laravel best practices.
+## Background
 
-## 🔧 Community Skills Áp Dụng
+Hiện tại project Task Manager chưa có cache layer. Mục tiêu:
+1. **Cache Task data** để tăng performance
+2. **Xóa tất cả cache Task** cùng lúc (flush all)
+3. **Xóa cache cụ thể** — ví dụ: xóa tất cả cache Task của 1 user cụ thể
+4. Tuân thủ **SOLID** và **best practices** của Laravel
 
-| Skill | Mục đích |
-|-------|----------|
-| `architecture` | Architectural Decision Framework — thiết kế layered architecture |
-| `clean-code` | SRP, DRY, KISS, YAGNI — coding standards |
-| `database-design` | Schema design, indexing, relationships |
-| `backend-dev-guidelines` | Layered architecture (Routes → Controllers → Services → Repositories) |
+## Architecture Decision
 
-## Phân Tích Nghiệp Vụ Hiện Tại (Yii2 Source)
+### Tại sao chọn Decorator Pattern?
 
-Dựa trên source tại `C:\wamp64\www\task-manager`, hệ thống có các nghiệp vụ chính:
-
-### Entities & Relationships
 ```mermaid
-erDiagram
-    USER ||--o{ TASK : creates
-    USER ||--o{ TASK : "assigned to"
-    TASK ||--o{ TASK_ATTACHMENT : has
-    USER ||--o{ TASK_ATTACHMENT : uploads
-    USER ||--o{ ACTIVITY_LOG : performs
+graph LR
+    Controller --> TaskService
+    TaskService --> |"Interface"| CachingTaskRepository
+    CachingTaskRepository --> |"Decorates"| TaskRepository
+    TaskRepository --> Database
+    CachingTaskRepository --> Cache["Laravel Cache (Tags)"]
 ```
 
-### Business Rules
-- **Task**: 8 trạng thái (`pending`, `active`, `in_progress`, `completed`, `archived`, `deleted`, `draft`, `cancelled`)
-- **Task**: Soft delete (`deleted_at`), overdue check, assignee
-- **TaskAttachment**: File upload metadata (name, path, type, size)
-- **ActivityLog**: Polymorphic audit trail (action, target_type, target_id, meta, IP, user-agent)
-- **User**: Auth (password hash, JWT, Bearer token), RBAC (admin/user)
+| Principle | Giải thích |
+|-----------|-----------|
+| **S** — Single Responsibility | [TaskRepository](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Repositories/TaskRepository.php#9-62) chỉ query DB, `CachingTaskRepository` chỉ quản lý cache |
+| **O** — Open/Closed | Không sửa [TaskRepository](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Repositories/TaskRepository.php#9-62) gốc, chỉ wrap nó |
+| **L** — Liskov Substitution | `CachingTaskRepository` implement cùng [TaskRepositoryInterface](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Interfaces/Repositories/TaskRepositoryInterface.php#8-24) |
+| **I** — Interface Segregation | Dùng chung interface, không tạo interface thừa |
+| **D** — Dependency Inversion | Service depend vào [TaskRepositoryInterface](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Interfaces/Repositories/TaskRepositoryInterface.php#8-24), không biết concrete class |
 
----
+### Tại sao chọn Cache Tags?
 
-## 📋 Milestones — Từ Dễ Đến Khó
-
-### 🟢 Milestone 1: Cấu Hình Laravel & Environment
-
-**Mức độ**: ⭐ Dễ — Laravel đã cài sẵn, chỉ cần config
-
-**Bạn sẽ học**:
-- File `.env` — cấu hình environment
-- File `config/database.php` — kết nối DB
-- Artisan CLI — công cụ command-line của Laravel
-
-**Các bước thực hiện:**
-
-```bash
-# 1. Đảm bảo đã có project (đã xong)
-cd C:\wamp64\www\l-task-manager
-
-# 2. Cấu hình .env (đã config MySQL)
-# DB_DATABASE=laravel_task_manager
-# DB_USERNAME=root
-# DB_PASSWORD=
-
-# 3. Tạo database trong MySQL
-mysql -u root -e "CREATE DATABASE IF NOT EXISTS laravel_task_manager CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-
-# 4. Chạy migration mặc định để test kết nối
-php artisan migrate
-
-# 5. Khởi động server
-php artisan serve
-```
-
-**Kiến thức cốt lõi:**
-- `.env` → biến môi trường, KHÔNG commit lên git
-- `config/` → đọc từ `.env` qua `env()` helper
-- `php artisan` → CLI tool cho mọi thao tác Laravel
-
----
-
-### 🟢 Milestone 2: Database Migrations
-
-**Mức độ**: ⭐ Dễ — Tạo bảng bằng migration thay vì SQL thủ công
-
-**Bạn sẽ học**:
-- Migration system — version control cho database
-- Schema Builder — tạo bảng, cột, index bằng PHP
-- Soft Deletes — xóa mềm tích hợp sẵn
-
-**Các migration cần tạo (theo thứ tự):**
-
-#### 1. Tasks table
-```bash
-php artisan make:migration create_tasks_table
-```
+Cache Tags cho phép tổ chức cache theo nhóm và **xóa hàng loạt** cực kỳ dễ:
 
 ```php
-Schema::create('tasks', function (Blueprint $table) {
-    $table->id();
-    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-    $table->foreignId('assignee_id')->nullable()->constrained('users')->nullOnDelete();
-    $table->string('title');
-    $table->string('description', 255)->nullable();
-    $table->text('content')->nullable();
-    $table->string('status', 20)->default('pending')
-          ->index();  // index vì filter theo status rất thường xuyên
-    $table->timestamp('due_at')->nullable();
-    $table->timestamps();     // created_at + updated_at
-    $table->softDeletes();    // deleted_at — Laravel tích hợp sẵn!
+// Lưu cache với nhiều tags
+Cache::tags(['tasks', 'tasks:user:5'])->put('task:42', $task);
 
-    // Composite index cho queries phổ biến
-    $table->index(['user_id', 'status']);
-    $table->index(['assignee_id', 'status']);
-});
-```
+// Xóa TẤT CẢ cache Task
+Cache::tags(['tasks'])->flush();
 
-#### 2. Task Attachments table
-```bash
-php artisan make:migration create_task_attachments_table
-```
-
-```php
-Schema::create('task_attachments', function (Blueprint $table) {
-    $table->id();
-    $table->foreignId('task_id')->constrained()->cascadeOnDelete();
-    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-    $table->string('file_name');
-    $table->string('file_path');
-    $table->string('file_type');
-    $table->unsignedBigInteger('file_size');
-    $table->timestamps();
-});
-```
-
-#### 3. Activity Logs table
-```bash
-php artisan make:migration create_activity_logs_table
-```
-
-```php
-Schema::create('activity_logs', function (Blueprint $table) {
-    $table->id();
-    $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-    $table->string('action', 50);
-    $table->string('target_type', 50);     // polymorphic: 'task', 'user'...
-    $table->unsignedBigInteger('target_id');
-    $table->json('meta')->nullable();       // flexible metadata
-    $table->string('ip_address')->nullable();
-    $table->string('user_agent')->nullable();
-    $table->text('error_message')->nullable();
-    $table->timestamp('created_at')->useCurrent();
-
-    $table->index(['target_type', 'target_id']);
-    $table->index(['user_id', 'created_at']);
-});
-```
-
-```bash
-# Chạy tất cả migrations
-php artisan migrate
-```
-
-> [!TIP]
-> **So sánh Yii2 vs Laravel**: Yii2 dùng `$this->createTable()` raw SQL style. Laravel dùng `Schema::create()` với fluent API dễ đọc hơn nhiều. Soft delete trong Yii2 phải tự implement (`deleted_at + status`), Laravel có sẵn `SoftDeletes` trait.
-
----
-
-### 🟢 Milestone 3: Eloquent Models & Relationships
-
-**Mức độ**: ⭐⭐ Dễ-Trung bình — Eloquent ORM rất trực quan
-
-**Bạn sẽ học**:
-- Eloquent Model — Active Record pattern
-- Relationships — `hasOne`, `hasMany`, `belongsTo`
-- Enums (PHP 8.1+) — thay thế constants
-- Accessors & Mutators
-- SoftDeletes trait
-
-**Cấu trúc thư mục (tuân thủ SRP):**
-```
-app/
-├── Models/
-│   ├── User.php          (có sẵn, mở rộng)
-│   ├── Task.php
-│   ├── TaskAttachment.php
-│   └── ActivityLog.php
-├── Enums/
-│   └── TaskStatus.php    (PHP Enum thay vì constants)
-```
-
-#### TaskStatus Enum
-```php
-// app/Enums/TaskStatus.php
-namespace App\Enums;
-
-enum TaskStatus: string
-{
-    case Pending     = 'pending';
-    case Active      = 'active';
-    case InProgress  = 'in_progress';
-    case Completed   = 'completed';
-    case Archived    = 'archived';
-    case Draft       = 'draft';
-    case Cancelled   = 'cancelled';
-
-    public function label(): string
-    {
-        return match($this) {
-            self::Pending    => 'Đang chờ',
-            self::Active     => 'Đang hoạt động',
-            self::InProgress => 'Đang giải quyết',
-            self::Completed  => 'Đã hoàn thành',
-            self::Archived   => 'Lưu trữ',
-            self::Draft      => 'Nháp',
-            self::Cancelled  => 'Đã hủy',
-        };
-    }
-}
+// Xóa chỉ cache Task của user #5
+Cache::tags(['tasks:user:5'])->flush();
 ```
 
 > [!IMPORTANT]
-> **Yii2 dùng `const STATUS_DELETED = 'deleted'`** — trong Laravel ta KHÔNG cần status deleted vì đã có `SoftDeletes` trait xử lý tự động qua `deleted_at` column. Đây là ưu điểm lớn của Laravel.
+> Cache Tags **chỉ hỗ trợ** driver `redis` hoặc `memcached`. Driver `database` hiện tại **không hỗ trợ tags**. Cần đổi `CACHE_STORE=redis` trong `.env`.
 
-#### Task Model
+### Cache Key Strategy
+
+| Cache Key | Tags | Mô tả |
+|-----------|------|-------|
+| `tasks:all:page:{page}:per:{perPage}` | `['tasks']` | Danh sách tất cả tasks |
+| `tasks:user:{userId}:page:{page}:per:{perPage}` | `['tasks', 'tasks:user:{userId}']` | Tasks của 1 user |
+| `tasks:detail:{id}` | `['tasks', 'tasks:user:{userId}', 'tasks:item:{id}']` | Chi tiết 1 task |
+
+---
+
+## Proposed Changes
+
+### Cache Infrastructure
+
+#### [NEW] [TaskCacheKeys.php](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Cache/TaskCacheKeys.php)
+
+Centralized cache key & tag management. Tất cả key và tag được định nghĩa tại đây, tránh magic strings rải rác.
+
 ```php
-// app/Models/Task.php
-namespace App\Models;
+<?php
 
-use App\Enums\TaskStatus;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Database\Eloquent\Relations\{BelongsTo, HasMany};
+namespace App\Domain\Task\Cache;
 
-class Task extends Model
+class TaskCacheKeys
 {
-    use SoftDeletes;
+    public const TAG_ALL_TASKS = 'tasks';
+    public const DEFAULT_TTL = 3600; // 1 hour
 
-    protected $fillable = [
-        'user_id', 'assignee_id', 'title',
-        'description', 'content', 'status', 'due_at',
-    ];
-
-    protected $casts = [
-        'status' => TaskStatus::class,
-        'due_at' => 'datetime',
-    ];
-
-    // ── Relationships ──
-    public function creator(): BelongsTo
+    public static function tagForUser(int $userId): string
     {
-        return $this->belongsTo(User::class, 'user_id');
+        return 'tasks:user:' . $userId;
     }
 
-    public function assignee(): BelongsTo
+    public static function tagForItem(int $taskId): string
     {
-        return $this->belongsTo(User::class, 'assignee_id');
+        return 'tasks:item:' . $taskId;
     }
 
-    public function attachments(): HasMany
+    public static function allTasksPaginated(int $page, int $perPage): string
     {
-        return $this->hasMany(TaskAttachment::class);
+        return 'tasks:all:page:' . $page . ':per:' . $perPage;
     }
 
-    // ── Business Logic ──
-    public function isOverdue(): bool
+    public static function userTasksPaginated(int $userId, int $page, int $perPage): string
     {
-        return $this->due_at
-            && $this->due_at->isPast()
-            && $this->status !== TaskStatus::Completed;
+        return 'tasks:user:' . $userId . ':page:' . $page . ':per:' . $perPage;
     }
 
-    public function isCompleted(): bool
+    public static function taskDetail(int $taskId): string
     {
-        return $this->status === TaskStatus::Completed;
+        return 'tasks:detail:' . $taskId;
     }
 }
 ```
 
-> [!TIP]
-> **So sánh Yii2 vs Laravel**:
-> - Yii2: `$this->hasOne(User::class, ['id' => 'assignee_id'])` — array syntax
-> - Laravel: `$this->belongsTo(User::class, 'assignee_id')` — method chaining, tự động suy luận
-> - Yii2: `strtotime($this->due_at) < time()` — thủ công
-> - Laravel: `$this->due_at->isPast()` — Carbon integration tự động
-
 ---
 
-### 🟡 Milestone 4: Authentication
+### Repository Layer (Decorator)
 
-**Mức độ**: ⭐⭐ Trung bình — Laravel có sẵn scaffolding
+#### [NEW] [CachingTaskRepository.php](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Repositories/CachingTaskRepository.php)
 
-**Bạn sẽ học**:
-- Laravel Breeze — auth scaffolding (login, register, reset password)
-- Middleware `auth` — bảo vệ routes
-- `Auth` facade — truy cập user hiện tại
+Decorator wrapping [TaskRepository](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Repositories/TaskRepository.php#9-62). Implements [TaskRepositoryInterface](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Interfaces/Repositories/TaskRepositoryInterface.php#8-24):
 
-**Cài đặt:**
-```bash
-composer require laravel/breeze --dev
-php artisan breeze:install blade
+- **Read methods** ([getAllPaginated](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Repositories/TaskRepository.php#22-26), [getByUserPaginated](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Interfaces/Services/TaskServiceInterface.php#12-13), [findOrFail](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Interfaces/Repositories/TaskRepositoryInterface.php#14-15)): check cache → miss → query DB → store cache
+- **Write methods** ([create](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Interfaces/Repositories/TaskRepositoryInterface.php#16-17), [update](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Services/TaskService.php#49-68), [updateByModel](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Repositories/TaskRepository.php#51-56), [delete](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Interfaces/Services/TaskServiceInterface.php#20-21)): delegate to [TaskRepository](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Repositories/TaskRepository.php#9-62) → **invalidate related cache tags**
 
-# Breeze tự tạo:
-# - Routes: login, register, password reset, email verify
-# - Controllers: Auth controllers
-# - Views: Blade templates
-# - Migration cho password reset tokens
-
-php artisan migrate
-npm install && npm run build
-```
-
-> [!NOTE]
-> Breeze tương đương với việc ta phải tự code `LoginForm`, `SignupForm`, `PasswordResetRequestForm` trong Yii2. Laravel làm hết cho bạn chỉ với 1 lệnh.
-
----
-
-### 🟡 Milestone 5: Task CRUD + Form Requests
-
-**Mức độ**: ⭐⭐ Trung bình — Core feature
-
-**Bạn sẽ học**:
-- Resource Controllers — CRUD tự động
-- Form Requests — validation tách riêng (thay vì validate trong model)
-- Route Model Binding — tự động inject model
-- Authorization Policies
-
-**Cấu trúc file:**
-```
-app/
-├── Http/
-│   ├── Controllers/
-│   │   └── TaskController.php       (Resource Controller)
-│   └── Requests/
-│       ├── StoreTaskRequest.php     (= TaskCreateForm trong Yii2)
-│       └── UpdateTaskRequest.php    (= TaskUpdateForm trong Yii2)
-├── Policies/
-│   └── TaskPolicy.php               (Authorization)
-```
-
-#### Routes
 ```php
-// routes/web.php
-Route::middleware('auth')->group(function () {
-    Route::resource('tasks', TaskController::class);
-    Route::patch('tasks/{task}/status', [TaskController::class, 'updateStatus'])
-         ->name('tasks.update-status');
-});
-```
+<?php
 
-#### Form Request (thay thế Yii2 Form Object)
-```php
-// app/Http/Requests/StoreTaskRequest.php
-namespace App\Http\Requests;
+namespace App\Domain\Task\Repositories;
 
-use App\Enums\TaskStatus;
-use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
+use App\Domain\Task\Cache\TaskCacheKeys;
+use App\Domain\Task\Interfaces\Repositories\TaskRepositoryInterface;
+use App\Domain\Task\Models\Task;
+use Illuminate\Cache\CacheManager;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 
-class StoreTaskRequest extends FormRequest
+class CachingTaskRepository implements TaskRepositoryInterface
 {
-    public function authorize(): bool
+    public function __construct(
+        private readonly TaskRepositoryInterface $inner,
+        private readonly CacheManager $cache,
+    ) {}
+
+    public function getAllPaginated(int $perPage = 15): LengthAwarePaginator
     {
-        return true; // đã check auth ở middleware
+        $page = request()->input('page', 1);
+        $key = TaskCacheKeys::allTasksPaginated((int) $page, $perPage);
+
+        return $this->cache
+            ->tags([TaskCacheKeys::TAG_ALL_TASKS])
+            ->remember($key, TaskCacheKeys::DEFAULT_TTL, function () use ($perPage) {
+                return $this->inner->getAllPaginated($perPage);
+            });
     }
 
-    public function rules(): array
+    public function getByUserPaginated(int $userId, int $perPage = 15): LengthAwarePaginator
+    {
+        $page = request()->input('page', 1);
+        $key = TaskCacheKeys::userTasksPaginated($userId, (int) $page, $perPage);
+
+        return $this->cache
+            ->tags([TaskCacheKeys::TAG_ALL_TASKS, TaskCacheKeys::tagForUser($userId)])
+            ->remember($key, TaskCacheKeys::DEFAULT_TTL, function () use ($userId, $perPage) {
+                return $this->inner->getByUserPaginated($userId, $perPage);
+            });
+    }
+
+    public function findOrFail(int $id): Task
+    {
+        $key = TaskCacheKeys::taskDetail($id);
+
+        return $this->cache
+            ->tags([TaskCacheKeys::TAG_ALL_TASKS, TaskCacheKeys::tagForItem($id)])
+            ->remember($key, TaskCacheKeys::DEFAULT_TTL, function () use ($id) {
+                return $this->inner->findOrFail($id);
+            });
+    }
+
+    // --- Write methods: delegate rồi invalidate cache ---
+
+    public function create(array $data): Task
+    {
+        $task = $this->inner->create($data);
+
+        // Flush danh sách (vì danh sách đã thay đổi)
+        $this->cache->tags([TaskCacheKeys::TAG_ALL_TASKS])->flush();
+
+        return $task;
+    }
+
+    public function update(int $id, array $data): bool
+    {
+        $result = $this->inner->update($id, $data);
+
+        // Flush cache liên quan tới task cụ thể này
+        $this->cache->tags([TaskCacheKeys::TAG_ALL_TASKS])->flush();
+
+        return $result;
+    }
+
+    public function updateByModel(Task $task, array $data): Task
+    {
+        $result = $this->inner->updateByModel($task, $data);
+
+        $this->cache->tags([TaskCacheKeys::TAG_ALL_TASKS])->flush();
+
+        return $result;
+    }
+
+    public function delete(int $id): bool
+    {
+        $result = $this->inner->delete($id);
+
+        $this->cache->tags([TaskCacheKeys::TAG_ALL_TASKS])->flush();
+
+        return $result;
+    }
+}
+```
+
+---
+
+### Cache Service (Manual Control)
+
+#### [NEW] [TaskCacheServiceInterface.php](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Interfaces/Services/TaskCacheServiceInterface.php)
+
+```php
+<?php
+
+namespace App\Domain\Task\Interfaces\Services;
+
+interface TaskCacheServiceInterface
+{
+    public function flushAll(): void;              // Xóa TẤT CẢ cache Task
+    public function flushForUser(int $userId): void; // Xóa cache Task của user
+    public function flushForTask(int $taskId): void; // Xóa cache 1 task cụ thể
+}
+```
+
+#### [NEW] [TaskCacheService.php](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Services/TaskCacheService.php)
+
+```php
+<?php
+
+namespace App\Domain\Task\Services;
+
+use App\Domain\Task\Cache\TaskCacheKeys;
+use App\Domain\Task\Interfaces\Services\TaskCacheServiceInterface;
+use Illuminate\Cache\CacheManager;
+
+class TaskCacheService implements TaskCacheServiceInterface
+{
+    public function __construct(private readonly CacheManager $cache) {}
+
+    public function flushAll(): void
+    {
+        $this->cache->tags([TaskCacheKeys::TAG_ALL_TASKS])->flush();
+    }
+
+    public function flushForUser(int $userId): void
+    {
+        $this->cache->tags([TaskCacheKeys::tagForUser($userId)])->flush();
+    }
+
+    public function flushForTask(int $taskId): void
+    {
+        $this->cache->tags([TaskCacheKeys::tagForItem($taskId)])->flush();
+    }
+}
+```
+
+---
+
+### Event-Driven Cache Invalidation
+
+#### [NEW] [TaskCacheEventSubscriber.php](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Listeners/TaskCacheEventSubscriber.php)
+
+Tự động xóa cache khi có event [TaskCreated](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Events/TaskCreated.php#9-17) hoặc [TaskStatusChanged](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Events/TaskStatusChanged.php#9-15):
+
+```php
+<?php
+
+namespace App\Domain\Task\Listeners;
+
+use App\Domain\Task\Cache\TaskCacheKeys;
+use App\Domain\Task\Events\TaskCreated;
+use App\Domain\Task\Events\TaskStatusChanged;
+use Illuminate\Cache\CacheManager;
+use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Events\Attributes\AsEventListener;
+
+class TaskCacheEventSubscriber
+{
+    public function __construct(private readonly CacheManager $cache) {}
+
+    public function handleTaskCreated(TaskCreated $event): void
+    {
+        // Task mới tạo → flush danh sách để hiển thị task mới
+        $this->cache->tags([TaskCacheKeys::TAG_ALL_TASKS])->flush();
+    }
+
+    public function handleTaskStatusChanged(TaskStatusChanged $event): void
+    {
+        // Status thay đổi → flush cache task cụ thể + danh sách
+        $this->cache->tags([
+            TaskCacheKeys::TAG_ALL_TASKS,
+        ])->flush();
+    }
+
+    /**
+     * Đăng ký các event listeners.
+     *
+     * @return array<string, string>
+     */
+    public function subscribe(Dispatcher $events): array
     {
         return [
-            'title'       => ['required', 'string', 'max:255'],
-            'description' => ['nullable', 'string', 'max:255'],
-            'content'     => ['nullable', 'string'],
-            'assignee_id' => ['nullable', 'exists:users,id'],
-            'due_at'      => ['nullable', 'date', 'after:now'],
-            'status'      => ['nullable', Rule::enum(TaskStatus::class)],
+            TaskCreated::class => 'handleTaskCreated',
+            TaskStatusChanged::class => 'handleTaskStatusChanged',
         ];
     }
 }
 ```
 
-> [!TIP]
-> **So sánh Yii2 vs Laravel**:
-> - Yii2: Validation rules ở trong Model → vi phạm SRP
-> - Laravel: Validation ở Form Request, tách biệt khỏi Model → tuân thủ SRP
-> - Yii2: Route phải khai báo từng action
-> - Laravel: `Route::resource()` tạo 7 routes (index, create, store, show, edit, update, destroy) chỉ 1 dòng
-
----
-
-### 🟡 Milestone 6: Service Layer & Repository Pattern (SOLID)
-
-**Mức độ**: ⭐⭐⭐ Trung bình-Khó — Architecture pattern
-
-**Bạn sẽ học**:
-- Service Pattern — business logic tách khỏi controller
-- Repository Pattern — data access layer
-- Interface binding — Dependency Injection via Service Container
-- Service Provider — đăng ký binding
-
-> [!IMPORTANT]
-> Đây chính là pattern đã dùng trong Yii2 source (`TaskService`, `TaskRepository`, interfaces). Laravel hỗ trợ DI container mạnh mẽ hơn nhiều.
-
-**Cấu trúc file:**
-```
-app/
-├── Contracts/                        (= Interfaces)
-│   ├── TaskServiceInterface.php
-│   └── TaskRepositoryInterface.php
-├── Services/
-│   └── TaskService.php
-├── Repositories/
-│   └── TaskRepository.php
-├── Providers/
-│   └── RepositoryServiceProvider.php (Binding interfaces → implementations)
-```
-
-#### Interface (Contract)
-```php
-// app/Contracts/TaskRepositoryInterface.php
-namespace App\Contracts;
-
-use App\Models\Task;
-use Illuminate\Pagination\LengthAwarePaginator;
-
-interface TaskRepositoryInterface
-{
-    public function findById(int $id): ?Task;
-    public function findByIdForUser(int $taskId, int $userId): ?Task;
-    public function search(array $filters): LengthAwarePaginator;
-    public function save(Task $task): bool;
-    public function delete(Task $task): bool;
-}
-```
-
-#### Service Provider (DI Container)
-```php
-// app/Providers/RepositoryServiceProvider.php
-namespace App\Providers;
-
-use Illuminate\Support\ServiceProvider;
-use App\Contracts\{TaskRepositoryInterface, TaskServiceInterface};
-use App\Repositories\TaskRepository;
-use App\Services\TaskService;
-
-class RepositoryServiceProvider extends ServiceProvider
-{
-    public function register(): void
-    {
-        $this->app->bind(TaskRepositoryInterface::class, TaskRepository::class);
-        $this->app->bind(TaskServiceInterface::class, TaskService::class);
-    }
-}
-```
-
-> [!TIP]
-> **So sánh Yii2 vs Laravel DI**:
-> - Yii2: `$this->repository = $repository ?? new TaskRepository();` — fallback thủ công
-> - Laravel: `$this->app->bind(Interface::class, Implementation::class)` — container auto-resolve, swap implementation dễ dàng khi test
-
----
-
-### 🟠 Milestone 7: File Upload — Task Attachments
-
-**Mức độ**: ⭐⭐⭐ Trung bình-Khó — File handling
-
-**Bạn sẽ học**:
-- Storage facade — filesystem abstraction
-- File validation — mime types, size limits
-- Storage links — public access
-- Service pattern cho upload logic
-
-**Cấu trúc:**
-```
-app/
-├── Services/
-│   └── TaskAttachmentService.php
-├── Http/
-│   └── Requests/
-│       └── StoreTaskAttachmentRequest.php
-```
-
-```bash
-# Tạo symbolic link storage/app/public → public/storage
-php artisan storage:link
-```
-
-```php
-// Upload flow
-$path = $request->file('attachment')->store(
-    "task-attachments/{$task->id}",
-    'public'
-);
-```
-
----
-
-### 🟠 Milestone 8: Activity Log System
-
-**Mức độ**: ⭐⭐⭐ Trung bình-Khó — Event-driven design
-
-**Bạn sẽ học**:
-- Laravel Events & Listeners — decouple logging logic
-- Observer pattern — tự động log khi model thay đổi
-- Request context — IP, User-Agent
-
-**2 cách tiếp cận:**
-
-| Cách | Ưu điểm | Nhược điểm |
-|------|---------|------------|
-| **Model Observer** | Tự động, không cần code trong controller | Chỉ catch model events |
-| **Events/Listeners** | Linh hoạt, log mọi action | Cần dispatch manually |
-
-**Khuyến nghị**: Dùng **cả 2** — Observer cho CRUD tự động, Events cho custom actions.
-
-```php
-// app/Observers/TaskObserver.php
-class TaskObserver
-{
-    public function created(Task $task): void
-    {
-        ActivityLog::create([
-            'user_id'     => auth()->id(),
-            'action'      => 'created',
-            'target_type' => 'task',
-            'target_id'   => $task->id,
-            'ip_address'  => request()->ip(),
-            'user_agent'  => request()->userAgent(),
-        ]);
-    }
-}
-```
-
----
-
-### 🔴 Milestone 9: REST API + Sanctum Authentication
-
-**Mức độ**: ⭐⭐⭐⭐ Khó — API layer
-
-**Bạn sẽ học**:
-- API Resource — response formatting
-- Laravel Sanctum — token-based authentication (thay JWT)
-- API versioning
-- Rate limiting
-
 > [!NOTE]
-> Yii2 source dùng JWT custom (`JwtHelper::decode`). Laravel dùng **Sanctum** — đơn giản hơn, built-in, và đủ cho hầu hết use cases. Nếu cần JWT, có thể dùng `tymon/jwt-auth`.
+> Subscriber sử dụng method `subscribe()` để đăng ký nhiều events trong 1 class. Cache sẽ bị invalidate khi event dispatch. Vì [TaskService](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Services/TaskService.php#13-74) đã dispatch events *sau* `DB::commit()`, data consistency được đảm bảo.
 
-```
-app/
-├── Http/
-│   ├── Controllers/
-│   │   └── Api/
-│   │       └── V1/
-│   │           ├── TaskController.php
-│   │           └── AuthController.php
-│   └── Resources/
-│       ├── TaskResource.php
-│       └── TaskCollection.php
+
+
+---
+
+### DI Binding
+
+#### [MODIFY] [AppServiceProvider.php](file:///c:/wamp64/www/l-task-manager/app/Providers/AppServiceProvider.php)
+
+Thay đổi binding [TaskRepositoryInterface](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Interfaces/Repositories/TaskRepositoryInterface.php#8-24):
+
+```diff
+ // Task Domain
+ $this->app->bind(TaskServiceInterface::class, TaskService::class);
+-$this->app->bind(TaskRepositoryInterface::class, TaskRepository::class);
++$this->app->bind(TaskRepositoryInterface::class, function ($app) {
++    return new CachingTaskRepository(
++        inner: new TaskRepository($app->make(Task::class)),
++        cache: $app->make(CacheManager::class),
++    );
++});
++
++// Task Cache Service
++$this->app->bind(TaskCacheServiceInterface::class, TaskCacheService::class);
 ```
 
-```bash
-composer require laravel/sanctum
-php artisan install:api
+Thêm đăng ký Event Subscriber:
+
+```diff
+ public function boot(): void
+ {
+-    //
++    Event::subscribe(TaskCacheEventSubscriber::class);
+ }
 ```
 
 ---
 
-### 🔴 Milestone 10: Queue Jobs & Background Processing
+## File Summary
 
-**Mức độ**: ⭐⭐⭐⭐ Khó — Async processing
-
-**Bạn sẽ học**:
-- Queue system — dispatch jobs
-- Mail notifications
-- Scheduled tasks (Task Scheduler)
-
-```bash
-php artisan make:job SendTaskNotification
-php artisan make:notification TaskAssigned
-php artisan queue:work
-```
-
----
-
-### 🔴 Milestone 11: Testing (PHPUnit)
-
-**Mức độ**: ⭐⭐⭐⭐ Khó — Chất lượng code
-
-**Bạn sẽ học**:
-- Feature Tests — test HTTP endpoints
-- Unit Tests — test services, models
-- Database testing — `RefreshDatabase`, factories
-- Mocking — test isolation
-
-```bash
-php artisan make:test TaskServiceTest --unit
-php artisan make:test TaskControllerTest
-php artisan make:factory TaskFactory --model=Task
-php artisan test
-```
-
----
-
-### 🔴 Milestone 12: CI/CD & Final Polish
-
-**Mức độ**: ⭐⭐⭐⭐⭐ Nâng cao
-
-- GitHub Actions CI pipeline
-- Caching (Redis)
-- Rate limiting cho API
-- Logging & error handling
-- Documentation (API docs)
-
----
-
-## 📊 So Sánh Kiến Trúc Yii2 vs Laravel
-
-| Aspect | Yii2 (Current) | Laravel (Target) |
-|--------|----------------|-------------------|
-| **Structure** | Advanced template (common/backend/frontend) | Single app with namespaced modules |
-| **ORM** | Active Record (raw) | Eloquent (fluent, Carbon, Enums) |
-| **Validation** | Rules trong Model (vi phạm SRP) | Form Requests (tách biệt) |
-| **DI Container** | Yii::$app component | Laravel Service Container (auto-resolve) |
-| **Auth** | Custom JWT + Bearer manual | Breeze + Sanctum (built-in) |
-| **Soft Delete** | Manual (`deleted_at` + status) | `SoftDeletes` trait (tự động) |
-| **Queue** | yii2-queue + Redis | Built-in queue (database/Redis/SQS) |
-| **Testing** | Codeception | PHPUnit (built-in, better DX) |
-| **CLI** | `php yii` | `php artisan` (richer ecosystem) |
+| # | Action | File | Purpose |
+|---|--------|------|---------|
+| 1 | NEW | [Cache/TaskCacheKeys.php](file:///c:/wamp64/www/l-task-manager/app/Domain/Task/Cache/TaskCacheKeys.php) | Cache key & tag constants |
+| 2 | NEW | `Repositories/CachingTaskRepository.php` | Decorator pattern |
+| 3 | NEW | `Interfaces/Services/TaskCacheServiceInterface.php` | Cache service interface |
+| 4 | NEW | `Services/TaskCacheService.php` | Manual cache flush API |
+| 5 | NEW | `Listeners/TaskCacheEventSubscriber.php` | Event-driven invalidation |
+| 6 | MODIFY | [Providers/AppServiceProvider.php](file:///c:/wamp64/www/l-task-manager/app/Providers/AppServiceProvider.php) | DI bindings + subscriber |
 
 ---
 
 ## Verification Plan
 
-### Tại mỗi Milestone
-Mỗi milestone sẽ được verify bằng cách:
-
-1. **Milestone 1-2**: Chạy `php artisan migrate` thành công, kiểm tra tables trong MySQL
-2. **Milestone 3**: Chạy `php artisan tinker` → test tạo Task, check relationships
-3. **Milestone 4**: Truy cập `/login`, `/register` trên browser
-4. **Milestone 5**: Test CRUD tasks trên browser, verify validation errors
-5. **Milestone 6**: Viết unit test cho Service và Repository
-6. **Milestone 7**: Upload file, verify file tồn tại trong `storage/`
-7. **Milestone 8**: Thực hiện CRUD task, verify activity_logs table có records
-8. **Milestone 9**: Test API bằng Postman/curl
-9. **Milestone 10**: Dispatch job, check queue processing
-10. **Milestone 11**: Chạy `php artisan test` — all green
-11. **Milestone 12**: Push to GitHub → CI passes
-
 ### Automated Tests
-```bash
-# Chạy toàn bộ test suite
-php artisan test
 
-# Chạy test cụ thể
-php artisan test --filter=TaskServiceTest
+Chạy PHPUnit test để đảm bảo không có regression:
+
+```bash
+cd c:\wamp64\www\l-task-manager
+php artisan test
+```
+
+### Manual Verification
+
+> [!IMPORTANT]
+> Yêu cầu: Cần cài Redis và set `CACHE_STORE=redis` trong `.env` trước khi test. Nếu chưa có Redis, có thể test với `CACHE_STORE=array` (nhưng tags sẽ chỉ hoạt động trong 1 request, không persist).
+
+1. **Test cache hit/miss**: Gọi API `GET /admin/tasks` 2 lần → lần 2 phải nhanh hơn (cache hit)
+2. **Test invalidation on create**: Tạo task mới → gọi lại danh sách → phải thấy task mới (cache đã bị flush)
+3. **Test flush all**: Gọi `TaskCacheService::flushAll()` → kiểm tra cache rỗng
+4. **Test flush by user**: Gọi `TaskCacheService::flushForUser($userId)` → cache user đó bị xóa, cache user khác vẫn còn
+
+Nếu bạn muốn test nhanh qua Tinker:
+
+```bash
+php artisan tinker
+>>> app(\App\Domain\Task\Interfaces\Services\TaskCacheServiceInterface::class)->flushAll();
+>>> // Kiểm tra cache đã bị xóa
 ```
