@@ -14,3 +14,16 @@ Thiết kế cấu trúc thư mục chuẩn best practice (tuân thủ SOLID, DD
 - Đảm bảo tuân thủ nguyên lý Single Responsibility Principle (Tách HTTP handling ra khỏi Business Logic).
 - Đảm bảo tuân thủ Open/Closed Principle (Thêm role mới không làm bung bét code cũ hiện tại).
 - Đảm bảo Dependency Inversion Principle (Controller gọi interface của Service).
+
+---
+
+# Task: Cấu trúc Thư mục API (Laravel)
+
+## Mục tiêu
+Thiết lập cấu trúc thư mục API chuẩn mực trên nền tảng DDD / Layered cho Laravel (áp dụng nguyên tắc SOLID).
+
+## Checklist
+- [x] Đọc và áp dụng các community skills (backend-dev-guidelines, clean-code, api-patterns, architecture).
+- [x] Thiết lập cấu trúc thư mục API tĩnh (xem file implementation_plan.md).
+- [ ] Review và lấy ý kiến đồng thuận từ User cho kiến trúc thư mục.
+- [ ] Bắt đầu thực thi (Execution Phase) tạo code và files thực tế.
