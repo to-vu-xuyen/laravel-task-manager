@@ -1,6 +1,7 @@
 <?php
 
-namespace App\Http\Api\V1\Resources;
+namespace App\Http\Api\V1\Task\Resources;
+
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -16,13 +17,13 @@ class TaskResource extends JsonResource
             'status' => $this->status->value,
             'status_label' => $this->status->label(),
             'due_date' => $this->due_date?->toIso8601String(),
-            'user' => [
+            'user' => $this->whenLoaded('user', fn() => [
                 'id' => $this->user?->id,
                 'name' => $this->user?->name,
-            ],
+            ]),
             'assignee' => $this->whenLoaded('assignee', fn() => [
-                'id' => $this->assignee->id,
-                'name' => $this->assignee->name,
+                'id' => $this->assignee?->id,
+                'name' => $this->assignee?->name,
             ]),
             'created_at' => $this->created_at->toIso8601String(),
             'updated_at' => $this->updated_at->toIso8601String(),

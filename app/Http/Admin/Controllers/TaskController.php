@@ -1,11 +1,11 @@
 <?php
 
-namespace App\Http\Controllers\Admin;
+namespace App\Http\Admin\Controllers;
 
 use App\Domain\Task\Interfaces\Services\TaskServiceInterface;
 use App\Http\Controllers\Controller;
-use App\Http\Requests\Admin\StoreTaskRequest;
-use App\Http\Requests\Admin\UpdateTaskRequest;
+use App\Http\Admin\Requests\StoreTaskRequest;
+use App\Http\Admin\Requests\UpdateTaskRequest;
 use App\Domain\Task\Models\Task;
 
 class TaskController extends Controller

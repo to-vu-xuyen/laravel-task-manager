@@ -34,15 +34,15 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         // Task Domain
-        $this->app->bind(TaskServiceInterface::class, TaskService::class);
-        // $this->app->bind(TaskRepositoryInterface::class, TaskRepository::class);
-        $this->app->bind(TaskRepositoryInterface::class, function ($app) {
-            return new CachingTaskRepository(
-                taskRepository: new TaskRepository($app->make(Task::class)),
-                cache: $app->make(CacheManager::class),
-            );
-        });
-        $this->app->bind(TaskCacheServiceInterface::class, TaskCacheService::class);
+        // $this->app->bind(TaskServiceInterface::class, TaskService::class);
+        // // $this->app->bind(TaskRepositoryInterface::class, TaskRepository::class);
+        // $this->app->bind(TaskRepositoryInterface::class, function ($app) {
+        //     return new CachingTaskRepository(
+        //         taskRepository: new TaskRepository($app->make(Task::class)),
+        //         cache: $app->make(CacheManager::class),
+        //     );
+        // });
+        // $this->app->bind(TaskCacheServiceInterface::class, TaskCacheService::class);
 
 
         // Task Attachment Domain

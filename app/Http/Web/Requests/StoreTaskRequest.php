@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Requests\Web;
+namespace App\Http\Web\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 use App\Domain\Task\Enums\TaskStatus;
