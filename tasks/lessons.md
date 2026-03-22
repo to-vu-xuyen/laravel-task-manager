@@ -27,3 +27,11 @@
 **Mistake**: Used `Overwrite: true` on `tasks/lessons.md`, deleting 2 existing lessons from previous conversations.
 
 **Rule**: ALWAYS read `tasks/lessons.md` first, then APPEND new lessons. Never use `Overwrite: true` on this file.
+
+## 2026-03-22: Phải kiểm tra tất cả Providers trước khi kết luận về DI Bindings
+
+**Sai lầm**: Chỉ xem `AppServiceProvider` thấy bindings bị comment → kết luận DI Bindings bị thiếu.
+
+**Thực tế**: Project đã tách bindings ra `TaskServiceProvider` + `ActivityLogServiceProvider` và đăng ký trong `bootstrap/providers.php`.
+
+**Rule**: Luôn kiểm tra `bootstrap/providers.php` + tất cả file trong `app/Providers/` trước khi kết luận về DI Bindings. Không bao giờ chỉ dựa vào `AppServiceProvider`.

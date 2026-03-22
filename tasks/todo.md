@@ -18,3 +18,8 @@ Thiết kế cấu trúc thư mục chuẩn best practice (tuân thủ SOLID, DD
 - [x] Phân tích hiện trạng mã nguồn dựa trên bản thiết kế để chắt lọc danh sách file còn thiếu.
 - [x] Lập kế hoạch chi tiết (`implementation_plan.md`) và yêu cầu USER duyệt theo đúng luồng Workflow Orchestration.
 - [x] (Đã duyệt) Tạo Artifact chứa 100% source code chuẩn mực cho các file thiếu: `routes/api.php`, FormRequests, ForceJsonResponse, Exceptions, ActivityLogServiceProvider (`ddd_missing_api_code.md`).
+
+## Task: Kiểm tra trạng thái API đã chạy được chưa (Giai đoạn 3)
+- [/] Kiểm tra danh sách route api (`php artisan route:list`).
+- [ ] Kiểm tra các file Controller, Service, Repository liên quan xem có logic nào chưa hoàn thiện.
+- [ ] Xác minh các file liên kết, Service Provider báo lỗi hay không.

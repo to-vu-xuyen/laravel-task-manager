@@ -51,8 +51,8 @@ class AppServiceProvider extends ServiceProvider
 
 
         // ActivityLog Domain
-        $this->app->bind(ActivityLogServiceInterface::class, ActivityLogService::class);
-        $this->app->bind(ActivityLogRepositoryInterface::class, ActivityLogRepository::class);
+        // $this->app->bind(ActivityLogServiceInterface::class, ActivityLogService::class);
+        // $this->app->bind(ActivityLogRepositoryInterface::class, ActivityLogRepository::class);
     }
 
 
@@ -62,6 +62,5 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         //
-        Event::subscribe(TaskCacheEventSubscriber::class);
     }
 }
